@@ -1,15 +1,25 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
 export default function AuthPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [mode, setMode] = useState('login')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const [form, setForm] = useState({ email:'', password:'', confirmPassword:'', username:'', dateOfBirth:'', ageConfirmed:false })
 
-  function set(field, value) { setForm(prev => ({ ...prev, [field]: value })); setError('') }
+  // Detect reset token in URL hash (Supabase envoie #access_token=...)
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash.includes('access_token') && hash.includes('type=recovery')) {
+      setMode('reset')
+    }
+  }, [location])
+
+  function set(field, value) { setForm(prev => ({ ...prev, [field]: value })); setError(''); setSuccess('') }
 
   function getAge(dateStr) {
     const birth = new Date(dateStr); const today = new Date()
@@ -30,12 +40,10 @@ export default function AuthPage() {
     if (!form.ageConfirmed) return setError('Tu dois confirmer avoir 18 ans ou plus.')
     if (form.password.length < 6) return setError('Mot de passe trop court (6 caracteres min).')
     if (form.password !== form.confirmPassword) return setError('Les mots de passe ne correspondent pas.')
-
     setLoading(true)
     try {
       const { data: existing } = await supabase.from('profiles').select('id').ilike('username', username).maybeSingle()
       if (existing) { setError('Ce pseudo est deja pris.'); setLoading(false); return }
-
       const { error: signUpError } = await supabase.auth.signUp({
         email: form.email, password: form.password,
         options: { data: { username, date_of_birth: form.dateOfBirth, age_confirmed: true } }
@@ -64,8 +72,35 @@ export default function AuthPage() {
     finally { setLoading(false) }
   }
 
+  async function handleForgot(e) {
+    e.preventDefault(); setError(''); setSuccess(''); setLoading(true)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(form.email, {
+        redirectTo: window.location.origin + '/auth',
+      })
+      if (error) throw error
+      setSuccess('Email envoye ! Verifie ta boite de reception.')
+    } catch (err) { setError(err.message || "Erreur lors de l'envoi.") }
+    finally { setLoading(false) }
+  }
+
+  async function handleReset(e) {
+    e.preventDefault(); setError('')
+    if (form.password.length < 6) return setError('Mot de passe trop court (6 caracteres min).')
+    if (form.password !== form.confirmPassword) return setError('Les mots de passe ne correspondent pas.')
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: form.password })
+      if (error) throw error
+      setSuccess('Mot de passe mis a jour ! Redirection...')
+      setTimeout(() => navigate('/matches'), 1800)
+    } catch (err) { setError(err.message || 'Erreur lors de la mise a jour.') }
+    finally { setLoading(false) }
+  }
+
   const inputCls = "w-full bg-gray-800 border border-gray-700/80 focus:border-brand-500 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none transition-colors"
 
+  // ── Mode Verification email ──
   if (mode === 'verify') return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
       <div className="bg-gray-900 rounded-2xl p-8 max-w-sm w-full text-center space-y-4 border border-gray-800">
@@ -83,6 +118,77 @@ export default function AuthPage() {
     </div>
   )
 
+  // ── Mode Reset password (depuis le lien email) ──
+  if (mode === 'reset') return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
+      <div className="bg-gray-900 rounded-2xl p-8 max-w-sm w-full space-y-6 border border-gray-800">
+        <div className="text-center">
+          <div className="w-12 h-12 bg-brand-900/50 border border-brand-800/60 rounded-2xl flex items-center justify-center mx-auto mb-3">
+            <svg className="w-6 h-6 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-black tracking-tight">Bet<span className="text-brand-500">iz</span></h1>
+          <p className="text-gray-400 text-sm mt-1">Nouveau mot de passe</p>
+        </div>
+        <form onSubmit={handleReset} className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1.5 font-medium">Nouveau mot de passe</label>
+            <input type="password" value={form.password} onChange={e => set('password', e.target.value)}
+              placeholder="6 caracteres minimum" className={inputCls} required />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1.5 font-medium">Confirmer</label>
+            <input type="password" value={form.confirmPassword} onChange={e => set('confirmPassword', e.target.value)}
+              placeholder="Retape ton mot de passe" className={inputCls} required />
+          </div>
+          {error && <div className="text-red-300 text-sm bg-red-950/60 border border-red-800/60 rounded-xl px-3 py-2.5">{error}</div>}
+          {success && <div className="text-brand-300 text-sm bg-brand-950/60 border border-brand-800/60 rounded-xl px-3 py-2.5">{success}</div>}
+          <button type="submit" disabled={loading}
+            className="w-full bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors text-sm">
+            {loading ? 'Mise a jour...' : 'Enregistrer le mot de passe'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+
+  // ── Mode Forgot password ──
+  if (mode === 'forgot') return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
+      <div className="bg-gray-900 rounded-2xl p-8 max-w-sm w-full space-y-6 border border-gray-800">
+        <div className="text-center">
+          <h1 className="text-2xl font-black tracking-tight">Bet<span className="text-brand-500">iz</span></h1>
+          <p className="text-gray-400 text-sm mt-1">Reinitialisation du mot de passe</p>
+        </div>
+        <p className="text-sm text-gray-400 leading-relaxed">
+          Saisis ton adresse email et on t'envoie un lien pour choisir un nouveau mot de passe.
+        </p>
+        <form onSubmit={handleForgot} className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1.5 font-medium">Email</label>
+            <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
+              placeholder="tonemail@exemple.com" className={inputCls} required />
+          </div>
+          {error && <div className="text-red-300 text-sm bg-red-950/60 border border-red-800/60 rounded-xl px-3 py-2.5">{error}</div>}
+          {success && <div className="text-brand-300 text-sm bg-brand-950/60 border border-brand-800/60 rounded-xl px-3 py-2.5">{success}</div>}
+          <button type="submit" disabled={loading}
+            className="w-full bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors text-sm">
+            {loading ? 'Envoi...' : 'Envoyer le lien'}
+          </button>
+          <button type="button" onClick={() => { setMode('login'); setError(''); setSuccess('') }}
+            className="w-full text-sm text-gray-500 hover:text-gray-300 transition-colors flex items-center justify-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+            Retour a la connexion
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+
+  // ── Login / Register ──
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4 py-8">
       <div className="bg-gray-900 rounded-2xl p-8 max-w-sm w-full space-y-6 border border-gray-800">
@@ -92,7 +198,7 @@ export default function AuthPage() {
         </div>
         <div className="flex bg-gray-800/80 rounded-xl p-1 gap-1">
           {['login','register'].map(m => (
-            <button key={m} onClick={() => { setMode(m); setError('') }}
+            <button key={m} onClick={() => { setMode(m); setError(''); setSuccess('') }}
               className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-colors ${mode===m ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}>
               {m === 'login' ? 'Connexion' : 'Inscription'}
             </button>
@@ -112,7 +218,15 @@ export default function AuthPage() {
               placeholder="tonemail@exemple.com" className={inputCls} required />
           </div>
           <div>
-            <label className="block text-xs text-gray-400 mb-1.5 font-medium">Mot de passe</label>
+            <label className="flex items-center justify-between mb-1.5">
+              <span className="text-xs text-gray-400 font-medium">Mot de passe</span>
+              {mode === 'login' && (
+                <button type="button" onClick={() => { setMode('forgot'); setError(''); setSuccess('') }}
+                  className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
+                  Mot de passe oublie ?
+                </button>
+              )}
+            </label>
             <input type="password" value={form.password} onChange={e => set('password', e.target.value)}
               placeholder="6 caracteres minimum" className={inputCls} required />
           </div>
@@ -136,9 +250,8 @@ export default function AuthPage() {
               </label>
             </>
           )}
-          {error && (
-            <div className="text-red-300 text-sm bg-red-950/60 border border-red-800/60 rounded-xl px-3 py-2.5">{error}</div>
-          )}
+          {error && <div className="text-red-300 text-sm bg-red-950/60 border border-red-800/60 rounded-xl px-3 py-2.5">{error}</div>}
+          {success && <div className="text-brand-300 text-sm bg-brand-950/60 border border-brand-800/60 rounded-xl px-3 py-2.5">{success}</div>}
           <button type="submit" disabled={loading}
             className="w-full bg-brand-600 hover:bg-brand-500 active:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-colors text-sm">
             {loading ? 'Chargement...' : mode === 'login' ? 'Se connecter' : 'Creer mon compte'}

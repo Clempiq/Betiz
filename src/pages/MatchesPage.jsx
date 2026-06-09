@@ -1,6 +1,60 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
+
+// ─── Confetti ─────────────────────────────────────────────────────────────────
+
+function ConfettiPiece({ style }) {
+  return <div className="fixed pointer-events-none z-[100]" style={style} />
+}
+
+function Confetti({ active, onDone }) {
+  const [pieces, setPieces] = useState([])
+
+  useEffect(() => {
+    if (!active) return
+    const colors = ['#16a34a','#22c55e','#4ade80','#fbbf24','#f59e0b','#ffffff','#86efac']
+    const shapes = ['rounded-sm','rounded-full','rotate-45']
+    const newPieces = Array.from({ length: 60 }, (_, i) => ({
+      id: i,
+      left: Math.random() * 100 + 'vw',
+      color: colors[Math.floor(Math.random() * colors.length)],
+      size: Math.random() * 8 + 6,
+      delay: Math.random() * 0.5,
+      duration: Math.random() * 1.5 + 1.5,
+      shape: shapes[Math.floor(Math.random() * shapes.length)],
+      dx: (Math.random() - 0.5) * 200,
+    }))
+    setPieces(newPieces)
+    const t = setTimeout(() => { setPieces([]); onDone?.() }, 3000)
+    return () => clearTimeout(t)
+  }, [active])
+
+  if (pieces.length === 0) return null
+
+  return (
+    <>
+      <style>{`
+        @keyframes confettiFall {
+          0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+      `}</style>
+      {pieces.map(p => (
+        <div key={p.id} className={`fixed pointer-events-none z-[100] ${p.shape}`}
+          style={{
+            left: p.left,
+            top: '-10px',
+            width: p.size,
+            height: p.size,
+            backgroundColor: p.color,
+            animation: `confettiFall ${p.duration}s ${p.delay}s ease-in forwards`,
+          }}
+        />
+      ))}
+    </>
+  )
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -20,6 +74,43 @@ function groupByDay(matches) {
     map.get(key).matches.push(m)
   }
   return [...map.values()].sort((a, b) => new Date(a.dateStr) - new Date(b.dateStr))
+}
+
+// ─── Countdown ────────────────────────────────────────────────────────────────
+
+function Countdown({ startTime }) {
+  const [diff, setDiff] = useState(new Date(startTime) - new Date())
+
+  useEffect(() => {
+    if (diff <= 0) return
+    const id = setInterval(() => setDiff(new Date(startTime) - new Date()), 1000)
+    return () => clearInterval(id)
+  }, [startTime])
+
+  if (diff <= 0) return <span className="text-[10px] font-bold text-yellow-400 bg-yellow-900/30 border border-yellow-800/40 px-2 py-0.5 rounded-full">Bientot</span>
+
+  const h = Math.floor(diff / 3600000)
+  const m = Math.floor((diff % 3600000) / 60000)
+  const s = Math.floor((diff % 60000) / 1000)
+
+  // Moins de 1h : afficher avec secondes
+  if (h === 0) {
+    return (
+      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border tabular-nums
+        ${m < 5 ? 'text-red-300 bg-red-900/30 border-red-800/40 animate-pulse' : 'text-orange-300 bg-orange-900/20 border-orange-800/30'}
+      `}>
+        {m}:{String(s).padStart(2,'0')}
+      </span>
+    )
+  }
+  if (h < 24) {
+    return (
+      <span className="text-[10px] font-bold text-blue-300 bg-blue-900/20 border border-blue-800/30 px-2 py-0.5 rounded-full tabular-nums">
+        {h}h{String(m).padStart(2,'0')}
+      </span>
+    )
+  }
+  return null
 }
 
 // ─── Bouton de cote ───────────────────────────────────────────────────────────
@@ -49,15 +140,21 @@ function MatchCard({ match, slip, onToggle }) {
   const hasSelection = slip.some(s => s.match_id === match.id)
   const isSelected = (sel) => slip.some(s => s.match_id === match.id && s.selection === sel)
   const isTest = match.external_id?.startsWith('test-')
+  const startTime = new Date(match.start_time)
+  const diffMs = startTime - new Date()
+  const showCountdown = diffMs > 0 && diffMs < 86400000 // < 24h
 
   return (
     <div className={`rounded-2xl overflow-hidden border transition-all duration-200
       ${hasSelection ? 'bg-gray-900 border-brand-800/60 shadow-lg shadow-brand-950/40' : 'bg-gray-900 border-gray-800/60'}
     `}>
       <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-gray-800/50">
-        <span className="text-[11px] text-gray-500 font-medium tracking-wide uppercase">
-          {isTest ? '🧪 Match test' : match.league}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 font-medium tracking-wide uppercase">
+            {isTest ? 'Match test' : match.league}
+          </span>
+          {showCountdown && <Countdown startTime={match.start_time} />}
+        </div>
         <span className="text-[11px] text-gray-500 font-medium tabular-nums">{formatTime(match.start_time)}</span>
       </div>
       <div className="px-4 pt-3 pb-4">
@@ -82,7 +179,7 @@ function MatchCard({ match, slip, onToggle }) {
 
 // ─── Ticket de pari (sidebar desktop / bottom sheet mobile) ──────────────────
 
-function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, isOpen, onToggleOpen }) {
+function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, isOpen, onToggleOpen, onLuckyDip, matches }) {
   const [stakeStr, setStakeStr] = useState('')
   const stake = parseInt(stakeStr) || 0
   const totalOdds = slip.reduce((acc, s) => Math.round(acc * s.odds_value * 100) / 100, 1)
@@ -135,26 +232,47 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
             <span className="text-xs font-bold bg-brand-700 text-white rounded-full px-2 py-0.5">{slip.length}</span>
           )}
         </div>
-        {slip.length > 0 && (
-          <button onClick={onClear} className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            Vider
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {matches?.length > 0 && (
+            <button onClick={onLuckyDip}
+              title="Sélection aléatoire"
+              className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-800/40 rounded-lg px-2 py-1 transition-all">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+              </svg>
+              Hasard
+            </button>
+          )}
+          {slip.length > 0 && (
+            <button onClick={onClear} className="text-xs text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              Vider
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
         {slip.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+          <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
             <div className="w-12 h-12 rounded-2xl bg-gray-800 flex items-center justify-center mb-3">
               <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
             </div>
             <p className="text-sm text-gray-500">Clique sur une cote</p>
-            <p className="text-xs text-gray-600 mt-1">pour l'ajouter au coupon</p>
+            <p className="text-xs text-gray-600 mt-1">ou utilise le bouton Hasard</p>
+            {matches?.length > 0 && (
+              <button onClick={onLuckyDip}
+                className="mt-4 flex items-center gap-2 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-800/50 text-purple-300 text-xs font-bold px-4 py-2.5 rounded-xl transition-all">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                </svg>
+                Selection aleatoire
+              </button>
+            )}
           </div>
         ) : (
           <div className="p-3 space-y-2">
@@ -182,7 +300,6 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
 
       {slip.length > 0 && (
         <div className="shrink-0 border-t border-gray-800/80 p-3 space-y-3">
-          {/* Cote totale */}
           <div className="flex items-center justify-between bg-gray-800/50 rounded-xl px-3 py-2">
             <span className="text-xs text-gray-500">Cote totale</span>
             <span className={`text-sm font-black tabular-nums ${isOverLimit ? 'text-red-400' : 'text-white'}`}>
@@ -190,8 +307,6 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
               {isOverLimit && <span className="ml-1.5 text-[10px] font-normal text-red-400">(max x50)</span>}
             </span>
           </div>
-
-          {/* Mise */}
           <div>
             <label className="block text-[11px] text-gray-500 mb-1.5 font-medium">Mise (pts)</label>
             <div className="relative">
@@ -203,7 +318,6 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
               />
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-600 pointer-events-none">pts</span>
             </div>
-            {/* Raccourcis de mise */}
             <div className="flex gap-1.5 mt-2">
               {[100, 250, 500].map(v => (
                 <button key={v} onClick={() => setStakeStr(String(Math.min(v, balance)))}
@@ -218,16 +332,12 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
             </div>
             {stake > balance && <p className="text-xs text-red-400 mt-1.5">Solde insuffisant</p>}
           </div>
-
-          {/* Gain potentiel */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-500">Gain potentiel</span>
             <span className={`text-base font-black tabular-nums ${payout > 0 ? 'text-brand-400' : 'text-gray-600'}`}>
               {payout > 0 ? payout.toLocaleString('fr-FR') : '—'} pts
             </span>
           </div>
-
-          {/* Valider */}
           <button onClick={() => onConfirm(stake, () => setStakeStr(''))}
             disabled={!canSubmit}
             className="w-full bg-brand-600 hover:bg-brand-500 active:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black py-3.5 rounded-xl transition-colors text-sm">
@@ -240,10 +350,7 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
 
   return (
     <>
-      {/* Mobile tab */}
       <MobileTab />
-
-      {/* Mobile bottom sheet */}
       {isOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onToggleOpen} />
@@ -253,8 +360,6 @@ function BettingSlip({ slip, onRemove, onClear, balance, onConfirm, isPlacing, i
           </div>
         </div>
       )}
-
-      {/* Desktop sidebar */}
       <div className="hidden md:flex flex-col w-80 shrink-0">
         <div className="sticky top-20 bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden max-h-[calc(100vh-6rem)] flex flex-col">
           <SlipContent />
@@ -286,6 +391,7 @@ export default function MatchesPage() {
   const [isPlacing, setIsPlacing] = useState(false)
   const [slip, setSlip] = useState([])
   const [slipOpen, setSlipOpen] = useState(false)
+  const [confetti, setConfetti] = useState(false)
 
   useEffect(() => { fetchMatches() }, [])
 
@@ -323,6 +429,25 @@ export default function MatchesPage() {
     if (window.innerWidth < 768) setSlipOpen(true)
   }
 
+  function handleLuckyDip() {
+    const availableMatches = matches.filter(m => m.odds?.length > 0)
+    if (availableMatches.length === 0) return
+    const maxSel = Math.min(availableMatches.length, 3)
+    const shuffled = [...availableMatches].sort(() => Math.random() - 0.5).slice(0, maxSel)
+    const CHOICES = ['home', 'draw', 'away']
+    const newSlip = shuffled.map(match => {
+      const availableOdds = match.odds.filter(o => CHOICES.includes(o.selection))
+      const picked = availableOdds[Math.floor(Math.random() * availableOdds.length)]
+      return {
+        match_id: match.id, home_team: match.home_team, away_team: match.away_team,
+        market: 'h2h', selection: picked.selection, odds_value: parseFloat(picked.value)
+      }
+    })
+    setSlip(newSlip)
+    if (window.innerWidth < 768) setSlipOpen(true)
+    showToast(`${newSlip.length} selections aleatoires ajoutees !`, 'success')
+  }
+
   async function handleConfirm(stake, resetStake) {
     if (!stake || stake <= 0) return
     setIsPlacing(true)
@@ -334,6 +459,7 @@ export default function MatchesPage() {
       if (data?.error) throw new Error(data.error)
       setSlip([]); resetStake(); setSlipOpen(false)
       await refetchProfile()
+      setConfetti(true)
       showToast(`Pari valide ! Gain potentiel : ${data.potential_payout?.toLocaleString('fr-FR')} pts`, 'success')
     } catch (err) { showToast(err.message || 'Erreur lors de la validation', 'error') }
     finally { setIsPlacing(false) }
@@ -352,6 +478,8 @@ export default function MatchesPage() {
 
   return (
     <div className="flex gap-6 items-start">
+      <Confetti active={confetti} onDone={() => setConfetti(false)} />
+
       {/* Colonne principale */}
       <div className="flex-1 min-w-0 pb-28 md:pb-4">
         <div className="flex items-start justify-between mb-6">
@@ -374,7 +502,7 @@ export default function MatchesPage() {
           <div className="text-center py-24">
             <div className="w-16 h-16 bg-gray-900 rounded-2xl flex items-center justify-center mx-auto mb-5">
               <svg className="w-8 h-8 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <circle cx="12" cy="12" r="10"/><path strokeLinecap="round" d="M12 2a10 10 0 016.3 17.8"/>
+                <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M12 2a10 10 0 016.3 17.8"/>
               </svg>
             </div>
             <p className="text-white font-semibold text-lg">Aucun match disponible</p>
@@ -402,7 +530,6 @@ export default function MatchesPage() {
         )}
       </div>
 
-      {/* Coupon (desktop sidebar / mobile bottom sheet) */}
       <BettingSlip
         slip={slip}
         onRemove={matchId => setSlip(prev => prev.filter(s => s.match_id !== matchId))}
@@ -412,6 +539,8 @@ export default function MatchesPage() {
         isPlacing={isPlacing}
         isOpen={slipOpen}
         onToggleOpen={() => setSlipOpen(o => !o)}
+        onLuckyDip={handleLuckyDip}
+        matches={matches}
       />
 
       <Toast toast={toast} />
